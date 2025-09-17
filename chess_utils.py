@@ -7,7 +7,8 @@ PIECE_TO_INT = {
     'P': 7, 'N': 8, 'B': 9, 'R': 10, 'Q': 11, 'K': 12
 }
 INT_TO_PIECE = {v: k for k, v in PIECE_TO_INT.items()}
-VOCAB_SIZE = 13  # 12 pieces + 1 for empty (0)
+ABSORBING_STATE_INT = 13
+VOCAB_SIZE = 14  # 12 pieces + 1 empty + 1 absorbing
 
 def fen_to_tensor(fen_string: str) -> torch.Tensor:
     """
