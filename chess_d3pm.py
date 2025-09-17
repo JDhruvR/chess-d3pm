@@ -9,6 +9,7 @@ x0-prediction model (like a Transformer) for training and sampling.
 
 import torch
 import torch.nn as nn
+from typing import Optional
 
 
 class D3PM(nn.Module):
@@ -131,13 +132,13 @@ class D3PM(nn.Module):
         gumbel_noise = -torch.log(-torch.log(torch.clip(noise, self.eps, 1.0)))
         return torch.argmax(logits + gumbel_noise, dim=-1)
 
-    def model_predict(self, x_t: torch.Tensor, t: torch.Tensor, cond: torch.Tensor = None) -> torch.Tensor:
+    def model_predict(self, x_t: torch.Tensor, t: torch.Tensor, cond: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
         Calls the underlying x0_model to predict the logits of the original data x_0.
         """
         return self.x0_model(x_t, t, cond)
 
-    def forward(self, x: torch.Tensor, cond: torch.Tensor = None) -> tuple[torch.Tensor, dict]:
+    def forward(self, x: torch.Tensor, cond: Optional[torch.Tensor] = None) -> tuple[torch.Tensor, dict]:
         """
         The main training step.
         1. Samples a timestep t.
@@ -177,7 +178,7 @@ class D3PM(nn.Module):
         }
 
     @torch.no_grad()
-    def p_sample(self, x_t: torch.Tensor, t: torch.Tensor, cond: torch.Tensor = None) -> torch.Tensor:
+    def p_sample(self, x_t: torch.Tensor, t: torch.Tensor, cond: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
         The reverse process step p(x_{t-1} | x_t). Samples x_{t-1} given x_t.
         """
@@ -196,7 +197,7 @@ class D3PM(nn.Module):
         return sample
 
     @torch.no_grad()
-    def sample(self, initial_noise: torch.Tensor, cond: torch.Tensor = None) -> torch.Tensor:
+    def sample(self, initial_noise: torch.Tensor, cond: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
         Generates a full sample from noise by iterating through the reverse process.
 
@@ -211,7 +212,7 @@ class D3PM(nn.Module):
         return x
 
     @torch.no_grad()
-    def sample_with_history(self, initial_noise: torch.Tensor, cond: torch.Tensor = None, stride: int = 10) -> list[torch.Tensor]:
+    def sample_with_history(self, initial_noise: torch.Tensor, cond: Optional[torch.Tensor] = None, stride: int = 10) -> list[torch.Tensor]:
         """
         Generates a full sample and saves intermediate steps.
         """
