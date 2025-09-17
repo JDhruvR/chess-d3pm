@@ -37,7 +37,6 @@ blku = lambda ic, oc: nn.Sequential(
 
 
 class DummyX0Model(nn.Module):
-
     def __init__(self, n_channel: int, N: int = 16) -> None:
         super(DummyX0Model, self).__init__()
         self.down1 = blk(n_channel, 16)
@@ -148,9 +147,7 @@ class D3PM(nn.Module):
 
         steps = torch.arange(n_T + 1, dtype=torch.float64) / n_T
         alpha_bar = torch.cos((steps + 0.008) / 1.008 * torch.pi / 2)
-        self.beta_t = torch.minimum(
-            1 - alpha_bar[1:] / alpha_bar[:-1], torch.ones_like(alpha_bar[1:]) * 0.999
-        )
+        self.beta_t = torch.minimum(1 - alpha_bar[1:] / alpha_bar[:-1], torch.ones_like(alpha_bar[1:]) * 0.999)
 
         # self.beta_t = [1 / (self.n_T - t + 1) for t in range(1, self.n_T + 1)]
         self.eps = 1e-6
@@ -159,13 +156,17 @@ class D3PM(nn.Module):
         q_mats = []  # these are cumulative
 
         for beta in self.beta_t:
-
             if forward_type == "uniform":
                 mat = torch.ones(num_classes, num_classes) * beta / num_classes
                 mat.diagonal().fill_(1 - (num_classes - 1) * beta / num_classes)
                 q_onestep_mats.append(mat)
+            elif forward_type == "absorb": # This assumes that the index at num_class - 1 is the [MASK] token.
+                mat = torch.eye(num_classes) * (1 - beta)
+                mat[:, num_classes - 1] += beta
+                q_onestep_mats.append(mat)
             else: # [TODO: WRITE MASKING]
                 raise NotImplementedError
+
         q_one_step_mats = torch.stack(q_onestep_mats, dim=0)
 
         q_one_step_transposed = q_one_step_mats.transpose(
