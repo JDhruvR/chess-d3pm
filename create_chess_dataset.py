@@ -35,8 +35,6 @@ class ChessDataset(Dataset):
         return len(self.data)
 
     def __getitem__(self, idx):
-        # The D3PM model expects the input as the data itself.
-        # We don't have separate labels for this unsupervised task.
         return self.data[idx]
 
 def create_and_save_dataset():
@@ -76,7 +74,7 @@ def create_and_save_dataset():
 
     # Stack all individual tensors into a single large tensor
     # The shape will be (NUM_SAMPLES, 64)
-    final_dataset_tensor = torch.stack(board_tensors)
+    final_dataset_tensor = torch.stack(board_tensors).long()
 
     print(f"\nConversion complete. Final tensor shape: {final_dataset_tensor.shape}")
 
@@ -86,7 +84,6 @@ def create_and_save_dataset():
     print(f"--- Dataset Creation Finished ---")
 
     return final_dataset_tensor
-
 
 if __name__ == "__main__":
     # 1. Generate and save the dataset file
