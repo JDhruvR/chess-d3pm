@@ -23,7 +23,7 @@ def fen_to_tensor(fen_string: str) -> torch.Tensor:
         torch.Tensor: A 1D tensor of shape (64,) with integer piece representations.
     """
     # The board tensor, initialized to 0 (empty)
-    board_tensor = torch.zeros(64, dtype=torch.int)
+    board_tensor = torch.zeros(64, dtype=torch.long)
 
     # The first part of FEN is the piece placement
     piece_placement = fen_string.split(' ')[0]
@@ -92,3 +92,30 @@ def tensor_to_fen(board_tensor: torch.Tensor, active_color='w', castling='KQkq',
     full_fen = f"{piece_placement} {active_color} {castling} {en_passant} {halfmove_clock} {fullmove_number}"
 
     return full_fen
+
+def mask_half(fen_str: str, ratio: float):
+    """
+    Masks approximately half of the squares on a chessboard represented by a FEN string,
+    replacing them with the absorbing state (13).
+
+    Args:
+        fen_str (str): The FEN string representing the chessboard.
+        ratio (float): The ratio of squares to mask (between 0 and 1). E.g 0.6 masks 60% of the squares.
+
+    Returns:
+        torch.Tensor: A tensor representing the masked board.
+    """
+    assert 0.0 <= ratio <= 1.0, "Ratio must be between 0 and 1."
+
+    board = fen_to_tensor(fen_str).float()
+    # Create a random tensor and threshold it to create a boolean mask
+    mask = torch.rand_like(board) < ratio  # True for ~ratio% of elements
+
+    # Use the mask to replace values with the absorbing state (13)
+    masked_board = torch.where(mask, board, torch.tensor(13.0))
+
+    return masked_board.long()
+
+if __name__ == "__main__":
+    fen_str = "r2q1Bk1/p3pp1p/1pnp2p1/2p5/P3P3/1P1P1N2/2P2KnP/R2Q3R b - - 0 14"
+    print(mask_half(fen_str, 0.5))
