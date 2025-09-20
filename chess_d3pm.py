@@ -9,14 +9,12 @@ x0-prediction model (like a Transformer) for training and sampling.
 
 import torch
 import torch.nn as nn
-from typing import Optional
-
 
 class D3PM(nn.Module):
     """
     The core D3PM engine for discrete state spaces using an absorbing state.
     """
-    def __init__(self, x0_model: nn.Module, n_T: int, num_classes: int, hybrid_loss_coeff=0.0,) -> None:
+    def __init__(self, x0_model: nn.Module, n_T: int, num_classes: int, hybrid_loss_coeff: float =0.0,) -> None:
         """
         Args:
             x0_model (nn.Module): The neural network that predicts the original data x_0 from a noisy input x_t.
@@ -27,11 +25,11 @@ class D3PM(nn.Module):
                                                  Defaults to 0.0, which means only CrossEntropyLoss is used.
         """
         super(D3PM, self).__init__()
-        self.x0_model = x0_model
-        self.n_T = n_T
-        self.num_classes = num_classes
-        self.hybrid_loss_coeff = hybrid_loss_coeff
-        self.eps = 1e-6
+        self.x0_model: nn.Module = x0_model
+        self.n_T: int = n_T
+        self.num_classes: int = num_classes
+        self.hybrid_loss_coeff: float= hybrid_loss_coeff
+        self.eps: float = 1e-6
 
         # --- Set up the noise schedule and transition matrices for an absorbing state ---
 
@@ -132,13 +130,13 @@ class D3PM(nn.Module):
         gumbel_noise = -torch.log(-torch.log(torch.clip(noise, self.eps, 1.0)))
         return torch.argmax(logits + gumbel_noise, dim=-1)
 
-    def model_predict(self, x_t: torch.Tensor, t: torch.Tensor, cond: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def model_predict(self, x_t: torch.Tensor, t: torch.Tensor, cond: torch.Tensor|None = None) -> torch.Tensor:
         """
         Calls the underlying x0_model to predict the logits of the original data x_0.
         """
         return self.x0_model(x_t, t, cond)
 
-    def forward(self, x: torch.Tensor, cond: Optional[torch.Tensor] = None) -> tuple[torch.Tensor, dict]:
+    def forward(self, x: torch.Tensor, cond: torch.Tensor|None = None) -> tuple[torch.Tensor, dict]:
         """
         The main training step.
         1. Samples a timestep t.
@@ -178,7 +176,7 @@ class D3PM(nn.Module):
         }
 
     @torch.no_grad()
-    def p_sample(self, x_t: torch.Tensor, t: torch.Tensor, cond: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def p_sample(self, x_t: torch.Tensor, t: torch.Tensor, cond: torch.Tensor|None = None) -> torch.Tensor:
         """
         The reverse process step p(x_{t-1} | x_t). Samples x_{t-1} given x_t.
         """
@@ -197,7 +195,7 @@ class D3PM(nn.Module):
         return sample
 
     @torch.no_grad()
-    def sample(self, initial_noise: torch.Tensor, cond: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def sample(self, initial_noise: torch.Tensor, cond: torch.Tensor|None = None) -> torch.Tensor:
         """
         Generates a full sample from noise by iterating through the reverse process.
 
@@ -212,7 +210,7 @@ class D3PM(nn.Module):
         return x
 
     @torch.no_grad()
-    def partial_sample(self, initial_state: torch.Tensor):
+    def partial_sample(self, initial_state: torch.Tensor, cond: torch.Tensor|None = None):
         x = initial_state
         for i in reversed(range(1, int(self.n_T/2) + 1)):
             t = torch.full((x.shape[0],), i, device=x.device, dtype=torch.long)
@@ -220,7 +218,7 @@ class D3PM(nn.Module):
         return x
 
     @torch.no_grad()
-    def sample_with_history(self, initial_noise: torch.Tensor, cond: Optional[torch.Tensor] = None, stride: int = 10) -> list[torch.Tensor]:
+    def sample_with_history(self, initial_noise: torch.Tensor, cond: torch.Tensor|None = None, stride: int = 10) -> list[torch.Tensor]:
         """
         Generates a full sample and saves intermediate steps.
         """
