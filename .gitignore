@@ -5,3 +5,4 @@ chess_positions.pt
 __pycache__
 ChessDiT_Architecture.png
 wandb/
+train.ipynb
