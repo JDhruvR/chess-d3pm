@@ -212,6 +212,14 @@ class D3PM(nn.Module):
         return x
 
     @torch.no_grad()
+    def partial_sample(self, initial_state: torch.Tensor):
+        x = initial_state
+        for i in reversed(range(1, int(self.n_T/2) + 1)):
+            t = torch.full((x.shape[0],), i, device=x.device, dtype=torch.long)
+            x = self.p_sample(x, t, cond)
+        return x
+
+    @torch.no_grad()
     def sample_with_history(self, initial_noise: torch.Tensor, cond: Optional[torch.Tensor] = None, stride: int = 10) -> list[torch.Tensor]:
         """
         Generates a full sample and saves intermediate steps.
