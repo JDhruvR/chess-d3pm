@@ -3,3 +3,5 @@ positions.csv
 sample_image.png
 chess_positions.pt
 __pycache__
+ChessDiT_Architecture.png
+wandb/
