@@ -16,6 +16,7 @@ class D3PM(nn.Module):
     """
     def __init__(self, x0_model: nn.Module, n_T: int, num_classes: int, hybrid_loss_coeff: float =0.0,) -> None:
         """
+        Note : Absorbing state is assumed to be the last class index (num_classes - 1).
         Args:
             x0_model (nn.Module): The neural network that predicts the original data x_0 from a noisy input x_t.
             n_T (int): The total number of diffusion timesteps.
@@ -64,19 +65,26 @@ class D3PM(nn.Module):
         q_mats = torch.stack(q_mats, dim=0)
 
         # Register buffers so they are moved to the correct device with the model
+        # `register_buffer` is a method in PyTorch's `nn.Module` class that allows you to define a tensor as part of the module's state, but without it being considered a trainable parameter.
         self.register_buffer("q_one_step_transposed", q_one_step_transposed)
         self.register_buffer("q_mats", q_mats)
 
         assert self.q_mats.shape == (self.n_T, self.num_classes, self.num_classes)
 
-    def _at(self, a: torch.Tensor, t: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
-        """Helper function to select rows from a based on t and x."""
+    def _at(self, a: torch.Tensor, t: torch.Tensor, x: torch.Tensor) -> torch.Tensor: # q(x_t|x_0)
+        """Helper function to select rows from a based on t and x.
+        Args:
+            `a`: Transition matrix (shape: `(n_T, 14, 14)`). `n_T` is the number of timesteps.
+            `t`: Timestep (shape: `(batch_size,)`).
+            `x`: Board state at timestep t (shape: `(batch_size, 64)`)
+        The function returns a tensor of shape `(batch_size, 64, 14)`. For each board in the batch and each square on the board, it gives the probabilities of transitioning to each of the 14 possible piece states.
+        """
         bs = t.shape[0]
         t_broadcast = t.reshape(bs, *([1] * (x.dim() - 1)))
         # out[i, j, k, l, m] = a[t[i], x[i, j, k, l], m]
         return a[t_broadcast - 1, x, :]
 
-    def q_posterior_logits(self, x_0: torch.Tensor, x_t: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+    def q_posterior_logits(self, x_0: torch.Tensor, x_t: torch.Tensor, t: torch.Tensor) -> torch.Tensor: # q(x_{t-1}|x_t, x_0)
         """
         Calculates the logits of the posterior distribution q(x_{t-1} | x_t, x_0).
 
@@ -120,7 +128,7 @@ class D3PM(nn.Module):
         )
         return kl_div.sum(dim=-1).mean()
 
-    def q_sample(self, x_0: torch.Tensor, t: torch.Tensor, noise: torch.Tensor) -> torch.Tensor:
+    def q_sample(self, x_0: torch.Tensor, t: torch.Tensor, noise: torch.Tensor) -> torch.Tensor: # samples from q(x_t|x_0)
         """
         The forward process q(x_t | x_0). Corrupts the clean input x_0 to a noisy x_t.
         """
@@ -130,7 +138,7 @@ class D3PM(nn.Module):
         gumbel_noise = -torch.log(-torch.log(torch.clip(noise, self.eps, 1.0)))
         return torch.argmax(logits + gumbel_noise, dim=-1)
 
-    def model_predict(self, x_t: torch.Tensor, t: torch.Tensor, cond: torch.Tensor|None = None) -> torch.Tensor:
+    def model_predict(self, x_t: torch.Tensor, t: torch.Tensor, cond: torch.Tensor|None = None) -> torch.Tensor: # p_theta(x_0|x_t)
         """
         Calls the underlying x0_model to predict the logits of the original data x_0.
         """
@@ -218,7 +226,7 @@ class D3PM(nn.Module):
         return x
 
     @torch.no_grad()
-    def sample_with_history(self, initial_noise: torch.Tensor, cond: torch.Tensor|None = None, stride: int = 10) -> list[torch.Tensor]:
+    def sample_with_history(self, initial_noise: torch.Tensor, cond: torch.Tensor|None = None, stride: int = 4) -> list[torch.Tensor]:
         """
         Generates a full sample and saves intermediate steps.
         """
@@ -227,6 +235,63 @@ class D3PM(nn.Module):
         for i in reversed(range(1, self.n_T + 1)):
             t = torch.full((x.shape[0],), i, device=x.device, dtype=torch.long)
             x = self.p_sample(x, t, cond)
+            if (i - 1) % stride == 0 or i == 1:
+                history.append(x.cpu())
+        return history
+
+    @torch.no_grad()
+    def p_sample_absorbing(self, x_t: torch.Tensor, t: torch.Tensor, cond: torch.Tensor|None = None) -> torch.Tensor:
+        """
+        Absorbing state sampling: once a position is predicted as non-absorbing, it stays fixed.
+        """
+        predicted_x0_logits = self.model_predict(x_t, t, cond)
+        pred_q_posterior_logits = self.q_posterior_logits(predicted_x0_logits, x_t, t)
+
+        # Use Gumbel-Max trick for sampling
+        noise = torch.rand_like(pred_q_posterior_logits)
+        gumbel_noise = -torch.log(-torch.log(torch.clip(noise, self.eps, 1.0)))
+
+        # Don't add noise at the last step (t=1)
+        not_first_step = (t != 1).float().reshape(x_t.shape[0], *([1] * (x_t.dim())))
+        sample = torch.argmax(
+            pred_q_posterior_logits + gumbel_noise * not_first_step, dim=-1
+        )
+
+        # Absorbing logic: keep non-absorbing predictions, only update absorbing positions
+        absorbing_mask = (x_t == (self.num_classes - 1))  # True where x_t is absorbing (13)
+        x_next = torch.where(absorbing_mask, sample, x_t)
+
+        return x_next
+
+    @torch.no_grad()
+    def sample_absorbing(self, initial_noise: torch.Tensor, cond: torch.Tensor|None = None) -> torch.Tensor:
+        """
+        Generates a full sample using absorbing state sampling.
+        """
+        x = initial_noise
+        for i in reversed(range(1, self.n_T + 1)):
+            t = torch.full((x.shape[0],), i, device=x.device, dtype=torch.long)
+            x = self.p_sample_absorbing(x, t, cond)
+        return x
+
+    @torch.no_grad()
+    def partial_sample_absorbing(self, initial_state: torch.Tensor, cond: torch.Tensor|None = None):
+        x = initial_state
+        for i in reversed(range(1, int(self.n_T/2) + 1)):
+            t = torch.full((x.shape[0],), i, device=x.device, dtype=torch.long)
+            x = self.p_sample_absorbing(x, t, cond)
+        return x
+
+    @torch.no_grad()
+    def sample_absorbing_with_history(self, initial_noise: torch.Tensor, cond: torch.Tensor|None = None, stride: int = 4) -> list[torch.Tensor]:
+        """
+        Generates a full sample and saves intermediate steps.
+        """
+        x = initial_noise
+        history = []
+        for i in reversed(range(1, self.n_T + 1)):
+            t = torch.full((x.shape[0],), i, device=x.device, dtype=torch.long)
+            x = self.p_sample_absorbing(x, t, cond)
             if (i - 1) % stride == 0 or i == 1:
                 history.append(x.cpu())
         return history

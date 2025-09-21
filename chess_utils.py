@@ -44,7 +44,7 @@ def fen_to_tensor(fen_string: str) -> torch.Tensor:
 
     return board_tensor
 
-def tensor_to_fen(board_tensor: torch.Tensor, active_color='w', castling='KQkq', en_passant='-', halfmove_clock=0, fullmove_number=1) -> str:
+def tensor_to_fen(board_tensor: torch.Tensor, active_color: str ='w', castling: str ='KQkq', en_passant: str ='-', halfmove_clock: int =0, fullmove_number: int=1) -> str:
     """
     Converts a 1D tensor of 64 tokens back into a FEN string.
 
