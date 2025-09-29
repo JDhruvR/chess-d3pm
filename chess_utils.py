@@ -1,4 +1,6 @@
 import torch
+import chess.pgn
+from io import StringIO
 
 # Define the vocabulary for a single square (token)
 # This mapping is crucial and must be used consistently.
@@ -115,6 +117,53 @@ def mask_half(fen_str: str, ratio: float):
     masked_board = torch.where(mask, board, torch.tensor(13.0))
 
     return masked_board.long()
+
+def pgn_to_fens(pgn_string, max_positions=5, skip_early_moves=10, max_moves=80):
+    """
+    Convert a PGN string to a list of FEN positions
+
+    Args:
+        pgn_string: The PGN game string
+        max_positions: Maximum FEN positions to extract per game
+        skip_early_moves: Skip this many moves from the beginning
+        max_moves: Stop extracting after this many moves
+
+    Returns:
+        List of FEN strings
+    """
+    try:
+        # Parse the PGN
+        pgn_io = StringIO(pgn_string)
+        game = chess.pgn.read_game(pgn_io)
+
+        if game is None:
+            return []
+
+        board = game.board()
+        fens = []
+        move_count = 0
+
+        # Go through all moves
+        for move in game.mainline_moves():
+            move_count += 1
+            board.push(move)
+
+            # Skip early moves and stop after max_moves
+            if move_count < skip_early_moves or move_count > max_moves:
+                continue
+
+            # Sample positions at regular intervals
+            if len(fens) < max_positions:
+                # Take every Nth move to spread positions across the game
+                interval = max(1, (max_moves - skip_early_moves) // max_positions)
+                if (move_count - skip_early_moves) % interval == 0:
+                    fens.append(board.fen())
+
+        return fens
+
+    except Exception as e:
+        print(f"Error processing PGN: {e}")
+        return []
 
 if __name__ == "__main__":
     fen_str = "r2q1Bk1/p3pp1p/1pnp2p1/2p5/P3P3/1P1P1N2/2P2KnP/R2Q3R b - - 0 14"
