@@ -10,6 +10,7 @@ x0-prediction model (like a Transformer) for training and sampling.
 import torch
 import torch.nn as nn
 
+
 class D3PM(nn.Module):
     """
     The core D3PM engine for discrete state spaces using an absorbing state.
@@ -29,7 +30,7 @@ class D3PM(nn.Module):
         self.x0_model: nn.Module = x0_model
         self.n_T: int = n_T
         self.num_classes: int = num_classes
-        self.hybrid_loss_coeff: float= hybrid_loss_coeff
+        self.hybrid_loss_coeff: float = hybrid_loss_coeff
         self.eps: float = 1e-6
 
         # --- Set up the noise schedule and transition matrices for an absorbing state ---
@@ -165,8 +166,8 @@ class D3PM(nn.Module):
         # --- Calculate Loss ---
         # 1. The primary loss: Cross-Entropy between predicted x_0 and true x_0
         ce_loss = torch.nn.functional.cross_entropy(
-            predicted_x0_logits.permute(0, 2, 1), # Shape: (B, Vocab, SeqLen)
-            x                                      # Shape: (B, SeqLen)
+            predicted_x0_logits.permute(0, 2, 1),  # Shape: (B, Vocab, SeqLen)
+            x,  # Shape: (B, SeqLen)
         )
 
         # 2. The auxiliary variational bound loss (optional)
@@ -184,114 +185,94 @@ class D3PM(nn.Module):
         }
 
     @torch.no_grad()
-    def p_sample(self, x_t: torch.Tensor, t: torch.Tensor, cond: torch.Tensor|None = None) -> torch.Tensor:
+    def p_sample(
+        self,
+        x_t: torch.Tensor,
+        t: torch.Tensor,
+        cond: torch.Tensor | None = None,
+        use_absorbing: bool = True,
+        sampling_strategy: str = "top5",
+    ) -> torch.Tensor:
         """
-        The reverse process step p(x_{t-1} | x_t). Samples x_{t-1} given x_t.
+        A single reverse process step p(x_{t-1} | x_t), with robust, mask-aware sampling.
+        This version operates on full-sized tensors to avoid indexing errors.
         """
+        # 1. Get the full posterior logits for x_{t-1}
         predicted_x0_logits = self.model_predict(x_t, t, cond)
-        pred_q_posterior_logits = self.q_posterior_logits(predicted_x0_logits, x_t, t)
+        final_logits = self.q_posterior_logits(predicted_x0_logits, x_t, t)
 
-        # Use Gumbel-Max trick for sampling
-        noise = torch.rand_like(pred_q_posterior_logits)
-        gumbel_noise = -torch.log(-torch.log(torch.clip(noise, self.eps, 1.0)))
+        # 2. Apply top-k filtering on the full logits if specified
+        if sampling_strategy == "top5":
+            k = min(5, final_logits.shape[-1])
+            top_k_values, top_k_indices = torch.topk(final_logits, k=k, dim=-1)
 
-        # Don't add noise at the last step (t=1)
-        not_first_step = (t != 1).float().reshape(x_t.shape[0], *([1] * (x_t.dim())))
-        sample = torch.argmax(
-            pred_q_posterior_logits + gumbel_noise * not_first_step, dim=-1
-        )
-        return sample
+            # Create a new tensor and scatter only the top-k values into it
+            filtered_logits = torch.full_like(final_logits, float("-inf"))
+            filtered_logits.scatter_(dim=-1, index=top_k_indices, src=top_k_values)
+            final_logits = filtered_logits
+
+        # 3. Apply Gumbel noise for stochastic sampling (except at the last step)
+        if t[0] != 1:
+            noise = torch.rand_like(final_logits)
+            gumbel_noise = -torch.log(-torch.log(torch.clip(noise, self.eps, 1.0)))
+            final_logits += gumbel_noise
+
+        # 4. Get a full sample from the potentially filtered and noised logits
+        sample_from_logits = torch.argmax(final_logits, dim=-1)
+
+        # 5. The core of the absorbing logic:
+        # If not using absorbing, the new sample is the result.
+        # If using absorbing, combine the old state with the new sample using a mask.
+        if not use_absorbing:
+            return sample_from_logits
+        else:
+            # Create mask of currently absorbing tokens
+            absorbing_mask = (x_t == (self.num_classes - 1))
+            # Where the mask is True, take the new sample; otherwise, keep the old token from x_t.
+            x_next = torch.where(absorbing_mask, sample_from_logits, x_t)
+            return x_next
 
     @torch.no_grad()
-    def sample(self, initial_noise: torch.Tensor, cond: torch.Tensor|None = None) -> torch.Tensor:
+    def sample(
+        self,
+        initial_state: torch.Tensor,
+        cond: torch.Tensor | None = None,
+        use_absorbing: bool = True,
+        sampling_strategy: str = "top5",
+        partial_generate: bool = False,
+        return_history: bool = False,
+        history_stride: int = 4,
+    ) -> torch.Tensor | list[torch.Tensor]:
         """
-        Generates a full sample from noise by iterating through the reverse process.
+        Generates a sample by iterating through the reverse process. This function consolidates
+        full, partial, history, absorbing, and top-k sampling.
 
         Args:
-            initial_noise (torch.Tensor): A tensor of shape (B, SeqLen) filled with the absorbing state index.
-            cond (torch.Tensor, optional): Conditioning information, if any. Defaults to None.
+            initial_state (torch.Tensor): The starting state for the reverse process.
+                                            To generate from scratch, provide a tensor filled
+                                            with the absorbing state index.
+            cond (torch.Tensor, optional): Conditioning information. Defaults to None.
+            use_absorbing (bool): If True, applies absorbing state logic. Defaults to True.
+            sampling_strategy (str): 'normal' for full sampling, 'top5' for top-k sampling.
+                                    Defaults to 'top5'.
+            partial_generate (bool): If True, runs the loop for n_T/2 steps. Defaults to False.
+            return_history (bool): If True, returns a list of intermediate states.
+                                    Defaults to False.
+            history_stride (int): How often to save states if return_history is True.
+                                    Defaults to 4.
         """
-        x = initial_noise
-        for i in reversed(range(1, self.n_T + 1)):
-            t = torch.full((x.shape[0],), i, device=x.device, dtype=torch.long)
-            x = self.p_sample(x, t, cond)
-        return x
-
-    @torch.no_grad()
-    def partial_sample(self, initial_state: torch.Tensor, cond: torch.Tensor|None = None):
         x = initial_state
-        for i in reversed(range(1, int(self.n_T/2) + 1)):
-            t = torch.full((x.shape[0],), i, device=x.device, dtype=torch.long)
-            x = self.p_sample(x, t, cond)
-        return x
-
-    @torch.no_grad()
-    def sample_with_history(self, initial_noise: torch.Tensor, cond: torch.Tensor|None = None, stride: int = 4) -> list[torch.Tensor]:
-        """
-        Generates a full sample and saves intermediate steps.
-        """
-        x = initial_noise
         history = []
-        for i in reversed(range(1, self.n_T + 1)):
+        num_steps = int(self.n_T / 2) if partial_generate else self.n_T
+
+        for i in reversed(range(1, num_steps + 1)):
             t = torch.full((x.shape[0],), i, device=x.device, dtype=torch.long)
-            x = self.p_sample(x, t, cond)
-            if (i - 1) % stride == 0 or i == 1:
+            x = self.p_sample(x, t, cond, use_absorbing, sampling_strategy)
+
+            if return_history and ((i - 1) % history_stride == 0 or i == 1):
                 history.append(x.cpu())
-        return history
 
-    @torch.no_grad()
-    def p_sample_absorbing(self, x_t: torch.Tensor, t: torch.Tensor, cond: torch.Tensor|None = None) -> torch.Tensor:
-        """
-        Absorbing state sampling: once a position is predicted as non-absorbing, it stays fixed.
-        """
-        predicted_x0_logits = self.model_predict(x_t, t, cond)
-        pred_q_posterior_logits = self.q_posterior_logits(predicted_x0_logits, x_t, t)
-
-        # Use Gumbel-Max trick for sampling
-        noise = torch.rand_like(pred_q_posterior_logits)
-        gumbel_noise = -torch.log(-torch.log(torch.clip(noise, self.eps, 1.0)))
-
-        # Don't add noise at the last step (t=1)
-        not_first_step = (t != 1).float().reshape(x_t.shape[0], *([1] * (x_t.dim())))
-        sample = torch.argmax(
-            pred_q_posterior_logits + gumbel_noise * not_first_step, dim=-1
-        )
-
-        # Absorbing logic: keep non-absorbing predictions, only update absorbing positions
-        absorbing_mask = (x_t == (self.num_classes - 1))  # True where x_t is absorbing (13)
-        x_next = torch.where(absorbing_mask, sample, x_t)
-
-        return x_next
-
-    @torch.no_grad()
-    def sample_absorbing(self, initial_noise: torch.Tensor, cond: torch.Tensor|None = None) -> torch.Tensor:
-        """
-        Generates a full sample using absorbing state sampling.
-        """
-        x = initial_noise
-        for i in reversed(range(1, self.n_T + 1)):
-            t = torch.full((x.shape[0],), i, device=x.device, dtype=torch.long)
-            x = self.p_sample_absorbing(x, t, cond)
-        return x
-
-    @torch.no_grad()
-    def partial_sample_absorbing(self, initial_state: torch.Tensor, cond: torch.Tensor|None = None):
-        x = initial_state
-        for i in reversed(range(1, int(self.n_T/2) + 1)):
-            t = torch.full((x.shape[0],), i, device=x.device, dtype=torch.long)
-            x = self.p_sample_absorbing(x, t, cond)
-        return x
-
-    @torch.no_grad()
-    def sample_absorbing_with_history(self, initial_noise: torch.Tensor, cond: torch.Tensor|None = None, stride: int = 4) -> list[torch.Tensor]:
-        """
-        Generates a full sample and saves intermediate steps.
-        """
-        x = initial_noise
-        history = []
-        for i in reversed(range(1, self.n_T + 1)):
-            t = torch.full((x.shape[0],), i, device=x.device, dtype=torch.long)
-            x = self.p_sample_absorbing(x, t, cond)
-            if (i - 1) % stride == 0 or i == 1:
-                history.append(x.cpu())
-        return history
+        if return_history:
+            return history
+        else:
+            return x
