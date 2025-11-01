@@ -134,12 +134,12 @@ chess-d3pm/
 
 ## Representation Formats
 
-### Square-based (Current)
+### Square-based
 - 64 tokens representing board squares
 - Vocabulary: 12 pieces + empty + absorbing (size 14)
 - Direct spatial correspondence to chess board
 
-### Piece-centric (Experimental)
+### Piece-centric (50% less tokens!!)
 - 32 tokens representing canonical piece instances
 - Vocabulary: 64 squares + off-board + absorbing (size 66)
 - Each token encodes piece location (1-64) or off-board (0)
