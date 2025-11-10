@@ -1,8 +1,7 @@
-roughwork.md
-positions.csv
-sample_image.png
-chess_positions.pt
 __pycache__
-ChessDiT_Architecture.png
 wandb/
-train.ipynb
+.ropeproject
+chess_positions_pc.pt
+chess_positions_sc.pt
+sample_pc_dataset_board.png
+sample_sc_dataset_board.png

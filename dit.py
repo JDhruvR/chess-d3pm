@@ -121,6 +121,7 @@ class ChessDiT(nn.Module):
     def __init__(
         self,
         vocab_size: int,
+        sequence_length: int,
         hidden_size: int = 768,
         depth: int = 12,
         num_heads: int = 12,
@@ -133,7 +134,7 @@ class ChessDiT(nn.Module):
 
         # 1. Input Embedders
         self.piece_embedder = nn.Embedding(vocab_size, hidden_size)
-        self.pos_embedder = nn.Parameter(torch.randn(1, 64, hidden_size)) # Learnable positional embeddings
+        self.pos_embedder = nn.Parameter(torch.randn(1, sequence_length, hidden_size)) # Learnable positional embeddings
         self.t_embedder = TimestepEmbedder(hidden_size)
 
         # 2. Transformer Blocks
